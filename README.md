@@ -22,10 +22,11 @@ The app listens on `HOST`/`PORT` env vars for cloud deployment.
 
 1. Start with **Load Demo** or paste a local DICOM path in **DICOM folder/file path**.
 2. Click **Load Path** to ingest a real study.
-3. Register custom models in the right panel.
-4. Optionally set model endpoint to `http://...` or `https://...`.
-5. Click **Run Segmentation**.
-6. Use **Export Masks** to save the current overlay volume.
+3. Or upload `.dcm` files / a `.zip` and click **Import Upload** (recommended on deployed web).
+4. Register custom models in the right panel.
+5. Optionally set model endpoint to `http://...` or `https://...`.
+6. Click **Run Segmentation**.
+7. Use **Export Masks** to save the current overlay volume.
 
 ## Segmentation API contract
 

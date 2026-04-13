@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import io
 import os
+import tempfile
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -27,6 +29,7 @@ state.trame__title = "Atlas Slicer Web"
 RUNTIME = {
     "volumes": {},  # study_id -> np.ndarray [z, h, w], uint8
     "overlays": {},  # study_id -> np.ndarray [z, h, w], uint8 {0,1}
+    "upload_dirs": [],  # temp folders created from browser uploads
 }
 
 
@@ -390,6 +393,71 @@ def load_study_from_path() -> None:
     add_log(f"Loaded study '{study['title']}' with {volume.shape[0]} slices.")
 
 
+def _decode_data_url(content: str) -> bytes:
+    if "," in content and content.startswith("data:"):
+        return base64.b64decode(content.split(",", 1)[1])
+    return base64.b64decode(content)
+
+
+def _prepare_upload_dir(upload_payload: list[dict]) -> Path:
+    upload_dir = Path(tempfile.mkdtemp(prefix="atlas_upload_"))
+    for item in upload_payload:
+        name = Path(str(item.get("name", "file.bin"))).name
+        content = item.get("content")
+        if not isinstance(content, str):
+            continue
+        data = _decode_data_url(content)
+        (upload_dir / name).write_bytes(data)
+    RUNTIME["upload_dirs"].append(str(upload_dir))
+    return upload_dir
+
+
+def load_study_from_upload() -> None:
+    files = state.uploaded_files or []
+    if not isinstance(files, list) or not files:
+        add_log("Upload import skipped: choose one or more files first.")
+        return
+
+    if not isinstance(files[0], dict):
+        add_log("Upload payload format not supported by this browser/session.")
+        return
+
+    try:
+        upload_dir = _prepare_upload_dir(files)
+    except Exception as exc:
+        add_log(f"Upload decode failed: {exc}")
+        return
+
+    # If user uploaded a zip, extract and use extracted folder.
+    zip_files = list(upload_dir.glob("*.zip"))
+    source_path = upload_dir
+    if zip_files:
+        extract_dir = upload_dir / "extracted"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with zipfile.ZipFile(zip_files[0], "r") as zf:
+                zf.extractall(extract_dir)
+            source_path = extract_dir
+        except Exception as exc:
+            add_log(f"ZIP extraction failed: {exc}")
+            return
+
+    try:
+        study, volume = load_dicom_volume(str(source_path))
+    except Exception as exc:
+        add_log(f"Upload import failed: {exc}")
+        return
+
+    RUNTIME["volumes"][study["id"]] = volume
+    RUNTIME["overlays"][study["id"]] = np.zeros_like(volume, dtype=np.uint8)
+    state.studies = [study, *state.studies]
+    state.selected_study_id = study["id"]
+    state.slice_number = 1
+    refresh_catalog()
+    update_viewer()
+    add_log(f"Uploaded study '{study['title']}' with {volume.shape[0]} slices.")
+
+
 def register_model() -> None:
     name = (state.new_model_name or "").strip()
     if not name:
@@ -550,7 +618,19 @@ def build_ui() -> None:
                             hide_details=True,
                             style="min-width: 360px;",
                         )
+                        vuetify.VFileInput(
+                            v_model=("uploaded_files", []),
+                            label="Upload DICOM files or ZIP",
+                            multiple=True,
+                            chips=True,
+                            show_size=True,
+                            accept=".dcm,.zip",
+                            density="compact",
+                            hide_details=True,
+                            style="min-width: 320px;",
+                        )
                         vuetify.VBtn("Load Path", click=ctrl.load_study_from_path, color="secondary", variant="flat")
+                        vuetify.VBtn("Import Upload", click=ctrl.load_study_from_upload, color="secondary", variant="flat")
                         vuetify.VBtn("Run Segmentation", click=ctrl.run_segmentation, color="secondary", variant="flat")
 
                 with html.Div(classes="workspace-grid"):
@@ -631,6 +711,7 @@ def build_ui() -> None:
 
 ctrl.load_demo = load_demo
 ctrl.load_study_from_path = load_study_from_path
+ctrl.load_study_from_upload = load_study_from_upload
 ctrl.register_model = register_model
 ctrl.run_segmentation = run_segmentation
 ctrl.export_masks = export_masks
@@ -644,6 +725,7 @@ state.model_count = 0
 state.selected_study_id = ""
 state.selected_model_id = ""
 state.new_study_path = ""
+state.uploaded_files = []
 state.new_model_name = ""
 state.new_model_modality = ""
 state.new_model_endpoint = ""
