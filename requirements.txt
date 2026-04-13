@@ -1,0 +1,7 @@
+trame
+trame-vuetify
+numpy
+pydicom
+Pillow
+requests
+nibabel
